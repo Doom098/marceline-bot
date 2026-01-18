@@ -46,12 +46,14 @@ def ensure_user_and_chat(update: Update, db: Session):
             member = ChatMember(chat_id=chat_id, user_id=user_id)
             db.add(member)
         
-        member.last_active = datetime.now()
+        member.last_active = datetime.utcnow()
+
         
         db.commit()
-    except SQLAlchemyError:
-        # If anything goes wrong (race condition), rollback to keep session clean
-        db.rollback()
+    except SQLAlchemyError as e:
+    db.rollback()
+    print("DB error:", e)
+
 
 def get_chat_member_name(user: User):
     if user.username:
