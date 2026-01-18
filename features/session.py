@@ -56,11 +56,13 @@ def format_session_text(session_data, db_session):
         pB_link = f"<a href='tg://user?id={pB.user_id}'>{pB.full_name}</a>" if pB else "Opponent"
         header = f"🎮 <b>1v1 Session</b>\n{pA_link} 🆚 {pB_link}\n"
     else:
+        # 2v2 Logic with Mentions
         squad_ids = session_data.get('squad', [])
         squad_names = []
         for uid in squad_ids:
             u = db_session.query(User).filter_by(user_id=uid).first()
-            if u: squad_names.append(u.full_name)
+            if u: 
+                squad_names.append(f"<a href='tg://user?id={u.user_id}'>{u.full_name}</a>")
         header = f"🎮 <b>2v2 Session</b>\nSquad: {', '.join(squad_names)}\n"
 
     in_list = []
@@ -89,26 +91,21 @@ def format_session_text(session_data, db_session):
 
 async def set_squad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    
-    # Identify users from message entities (Mentions)
     ids = set()
     
     if update.message.entities:
         for entity in update.message.entities:
             if entity.type == "text_mention":
-                # User object available directly
                 ids.add(entity.user.id)
             elif entity.type == "mention":
-                # Username mention - lookup in DB
                 username = update.message.text[entity.offset:entity.offset+entity.length]
                 username = username.lstrip('@')
-                
                 with next(get_db()) as db:
                     u = db.query(User).filter(User.username.ilike(username)).first()
                     if u: ids.add(u.user_id)
     
     if not ids:
-         await update.message.reply_text("⚠️ Please mention the users you want in the squad.\nExample: <code>/setsquad @User1 @User2 @User3</code>", parse_mode="HTML")
+         await update.message.reply_text("⚠️ Mention users to add to squad.\nEx: <code>/setsquad @User1 @User2</code>", parse_mode="HTML")
          return
 
     with next(get_db()) as db:
@@ -117,8 +114,7 @@ async def set_squad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         flag_modified(chat, "primary_squad")
         db.commit()
         
-    await update.message.reply_text(f"✅ <b>Squad Saved!</b>\nAdded {len(ids)} players to 2v2 list.", parse_mode="HTML")
-
+    await update.message.reply_text(f"✅ <b>Squad Saved!</b>\nAdded {len(ids)} players.", parse_mode="HTML")
 
 # --- Handlers ---
 
@@ -142,9 +138,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "new_1v1":
             members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
             buttons = []
+            # We encode the Host ID (user_id) into the button so only THEY can click it
             for m in members:
                 u = db.query(User).filter_by(user_id=m.user_id).first()
-                if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}")])
+                if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}_{user_id}")])
             
             if not buttons:
                  await query.edit_message_text("No other members tracked yet. Ask them to speak!")
@@ -154,13 +151,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data.startswith("sel_opp_"):
-            opp_id = int(data.split("_")[-1])
+            parts = data.split("_")
+            opp_id = int(parts[2])
+            host_id = int(parts[3])
+
+            # Security Check: Only the host (who clicked /play or Change Opponent) can pick
+            if user_id != host_id:
+                await context.bot.answer_callback_query(query.id, "🚫 Only the host can pick the opponent.", show_alert=True)
+                return
+
             ttl_min = db.query(Chat).filter_by(chat_id=chat_id).first().session_ttl
             expiry = datetime.now(timezone.utc) + timedelta(minutes=ttl_min)
             
             session_data = {
                 "type": "1v1",
-                "pA": user_id,
+                "pA": host_id,
                 "pB": opp_id,
                 "in": [], "out": [], "pending": {}
             }
@@ -177,7 +182,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=sent_msg.message_id,
                 chat_id=chat_id,
                 session_type="1v1",
-                initiator_id=user_id,
+                initiator_id=host_id,
                 expires_at=expiry,
                 state_data=session_data
             )
@@ -238,7 +243,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         s_data = dict(session.state_data)
         
-        # --- PERMISSION CHECKS ---
         is_player = (user_id == s_data.get('pA') or user_id == s_data.get('pB'))
         
         if session.session_type == "1v1" and not is_player and data in ["stop_session", "stats_input"]:
@@ -246,24 +250,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
              return
 
         if data == "pick_opp":
+            # Strict Host Check
             if user_id != s_data.get('pA'):
                 await context.bot.answer_callback_query(query.id, "🚫 Only the host can change opponent.", show_alert=True)
                 return
+            
             db.delete(session)
             db.commit()
+            
+            # Show Picker with HOST ID LOCKED
             members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
             buttons = []
             for m in members:
                 u = db.query(User).filter_by(user_id=m.user_id).first()
-                if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}")])
+                if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}_{user_id}")])
+            
             await query.edit_message_text("Select New Opponent:", reply_markup=InlineKeyboardMarkup(buttons))
             return
             
         if data == "edit_squad":
+            # Just an alert because editing requires typing a command
             await context.bot.answer_callback_query(query.id, "Use /setsquad @p1 @p2... to change squad", show_alert=True)
             return
 
-        # RSVP Logic
         if data in ["rsvp_in", "rsvp_out"]:
             if user_id in s_data['in']: s_data['in'].remove(user_id)
             if user_id in s_data['out']: s_data['out'].remove(user_id)
@@ -283,6 +292,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timers = [
                 [InlineKeyboardButton("5m", callback_data="time_5m"), InlineKeyboardButton("10m", callback_data="time_10m")],
                 [InlineKeyboardButton("15m", callback_data="time_15m"), InlineKeyboardButton("30m", callback_data="time_30m")],
+                [InlineKeyboardButton("45m", callback_data="time_45m"), InlineKeyboardButton("1h", callback_data="time_1h")], # Added here
                 [InlineKeyboardButton("🔙 Back", callback_data="time_back")]
             ]
             await query.message.edit_reply_markup(InlineKeyboardMarkup(timers))
@@ -293,7 +303,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.edit_reply_markup(get_session_keyboard(s_data, session.session_type))
                 return
                 
-            label = data.split("_")[1] # 5m, 10m...
+            label = data.split("_")[1]
             
             if user_id in s_data['in']: s_data['in'].remove(user_id)
             if user_id in s_data['out']: s_data['out'].remove(user_id)
