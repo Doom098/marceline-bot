@@ -7,7 +7,7 @@ from datetime import datetime
 def ensure_user_and_chat(update: Update, db: Session):
     """
     Updates User and Chat tables safely. 
-    Handles race conditions/errors by rolling back if needed.
+    Uses flush() to prevent ForeignKey errors.
     """
     if not update.effective_chat or not update.effective_user:
         return
@@ -26,6 +26,7 @@ def ensure_user_and_chat(update: Update, db: Session):
         if not chat_db:
             chat_db = Chat(chat_id=chat_id, title=chat_title)
             db.add(chat_db)
+            db.flush() # <--- CRITICAL: Save Chat to DB immediately
         else:
             if chat_db.title != chat_title:
                 chat_db.title = chat_title
@@ -35,6 +36,7 @@ def ensure_user_and_chat(update: Update, db: Session):
         if not user_db:
             user_db = User(user_id=user_id, full_name=full_name, username=username)
             db.add(user_db)
+            db.flush() # <--- CRITICAL: Save User to DB immediately so ChatMember can find it
         else:
             if user_db.full_name != full_name or user_db.username != username:
                 user_db.full_name = full_name
@@ -46,13 +48,12 @@ def ensure_user_and_chat(update: Update, db: Session):
             member = ChatMember(chat_id=chat_id, user_id=user_id)
             db.add(member)
         
-        member.last_active = datetime.utcnow()
-
+        member.last_active = datetime.now()
         
         db.commit()
     except SQLAlchemyError as e:
+        print(f"DB Error: {e}") # Print error to logs for debugging
         db.rollback()
-        print("DB error:", e)
 
 def get_chat_member_name(user: User):
     if user.username:
