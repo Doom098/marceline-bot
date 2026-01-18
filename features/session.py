@@ -82,8 +82,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
 
-   with next(get_db()) as db:
-    ensure_user_and_chat(update, db)
+    with next(get_db()) as db:
+        ensure_user_and_chat(update, db)
+
 
     # then continue your callback logic...
     # read members, edit messages, save session data, etc.
