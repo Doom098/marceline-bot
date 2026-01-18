@@ -10,21 +10,18 @@ from datetime import datetime, timezone
 # =========================================
 
 async def start_stats_input(context, chat_id, pA_id, pB_id):
-    # Fetch names immediately
     with next(get_db()) as db:
         uA = db.query(User).filter_by(user_id=pA_id).first()
         uB = db.query(User).filter_by(user_id=pB_id).first()
         name_A = uA.full_name if uA else "Player A"
         name_B = uB.full_name if uB else "Player B"
 
-    # Store names in context for the next steps
     context.chat_data['current_stats'] = {
         'pA': pA_id, 'pB': pB_id, 
         'nameA': name_A, 'nameB': name_B,
         'chat_id': chat_id
     }
     
-    # Send "Matches Played?"
     keyboard = []
     row1 = [InlineKeyboardButton(str(i), callback_data=f"stat_matches_{i}") for i in range(1, 6)]
     row2 = [InlineKeyboardButton(str(i), callback_data=f"stat_matches_{i}") for i in range(6, 11)]
@@ -54,7 +51,6 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         val = int(data.split("_")[-1])
         stats['played'] = val
         
-        # Ask Wins for Player A
         keys = [InlineKeyboardButton(str(i), callback_data=f"stat_winsA_{i}") for i in range(val + 1)]
         rows = [keys[i:i+5] for i in range(0, len(keys), 5)]
         
@@ -70,7 +66,6 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         val = int(data.split("_")[-1])
         stats['winsA'] = val
         
-        # Ask Wins for Player B
         remaining = stats['played'] - val
         keys = [InlineKeyboardButton(str(i), callback_data=f"stat_winsB_{i}") for i in range(remaining + 1)]
         rows = [keys[i:i+5] for i in range(0, len(keys), 5)]
@@ -87,19 +82,14 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         val = int(data.split("_")[-1])
         stats['winsB'] = val
         
-        # Calculate Draws
         draws = stats['played'] - stats['winsA'] - stats['winsB']
         stats['draws'] = draws
         
-        # Save to DB
         with next(get_db()) as db:
-            # Insert Wins A
             for _ in range(stats['winsA']):
                 db.add(MatchStat(chat_id=stats['chat_id'], player_a_id=stats['pA'], player_b_id=stats['pB'], score_a=1, score_b=0, is_draw=False))
-            # Insert Wins B
             for _ in range(stats['winsB']):
                 db.add(MatchStat(chat_id=stats['chat_id'], player_a_id=stats['pA'], player_b_id=stats['pB'], score_a=0, score_b=1, is_draw=False))
-            # Insert Draws
             for _ in range(stats['draws']):
                 db.add(MatchStat(chat_id=stats['chat_id'], player_a_id=stats['pA'], player_b_id=stats['pB'], score_a=0, score_b=0, is_draw=True))
             
@@ -128,13 +118,13 @@ def calculate_leaderboard(db, chat_id, since_date=None):
     data = {} 
     
     for s in stats:
-        # A
+        # Process A
         if s.player_a_id not in data: data[s.player_a_id] = {'wins': 0, 'draws': 0, 'total': 0}
         data[s.player_a_id]['total'] += 1
         if s.score_a > s.score_b: data[s.player_a_id]['wins'] += 1
         if s.is_draw: data[s.player_a_id]['draws'] += 1
         
-        # B
+        # Process B
         if s.player_b_id not in data: data[s.player_b_id] = {'wins': 0, 'draws': 0, 'total': 0}
         data[s.player_b_id]['total'] += 1
         if s.score_b > s.score_a: data[s.player_b_id]['wins'] += 1
@@ -142,7 +132,7 @@ def calculate_leaderboard(db, chat_id, since_date=None):
         
     leaderboard = []
     for uid, d in data.items():
-        if d['total'] < 3: continue # Min matches
+        if d['total'] < 3: continue 
         win_pct = (d['wins'] + 0.5 * d['draws']) / d['total'] * 100
         user = db.query(User).filter_by(user_id=uid).first()
         name = user.full_name if user else str(uid)
@@ -152,8 +142,9 @@ def calculate_leaderboard(db, chat_id, since_date=None):
     return leaderboard
 
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # If @user argument provided -> Show Individual Stats
-    if context.args or (update.message and update.message.entities):
+    # FIX: Only jump to Individual Stats if there are specific ARGS or a REPLY
+    # This prevents the command entity itself ("/stats") from triggering the wrong view.
+    if context.args or update.message.reply_to_message:
         await show_individual_stats(update, context)
         return
 
@@ -170,7 +161,6 @@ async def show_individual_stats(update: Update, context: ContextTypes.DEFAULT_TY
     target_id = None
     target_name = "User"
 
-    # Identify user
     from features.general import get_target_users
     with next(get_db()) as db:
         targets = await get_target_users(update, context, db)
@@ -178,7 +168,7 @@ async def show_individual_stats(update: Update, context: ContextTypes.DEFAULT_TY
             target_id = targets[0].id
             target_name = targets[0].full_name
         else:
-            # Self stats?
+            # Self stats fallback (only if args were confusing or empty target found)
             target_id = update.effective_user.id
             target_name = update.effective_user.full_name
             
@@ -246,6 +236,7 @@ async def handle_lb_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     with next(get_db()) as db:
         if data == "lb_monthly":
             now = datetime.now(timezone.utc)
+            # Safe reset to start of month
             start_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             lb = calculate_leaderboard(db, chat_id, start_month)
             title = f"📅 <b>Monthly Leaderboard ({now.strftime('%B')})</b>"
@@ -254,7 +245,7 @@ async def handle_lb_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             title = "♾️ <b>Overall Leaderboard</b>"
             
         if not lb:
-            await query.edit_message_text(f"{title}\nNo stats yet.", parse_mode="HTML")
+            await query.edit_message_text(f"{title}\nNo stats yet (min 3 matches).", parse_mode="HTML")
             return
 
         txt = f"{title}\n\n"
