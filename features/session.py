@@ -3,24 +3,20 @@ from telegram.ext import ContextTypes
 from database import get_db
 from models import GameSession, User, Chat, ChatMember, MatchStat
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import or_
+from sqlalchemy.orm.attributes import flag_modified # <--- KEY IMPORT FOR FIXING RSVP
 import json
 
 # --- Helpers ---
 def get_session_keyboard(session_data, session_type):
-    # Core RSVP Buttons
     rsvp_row = [
         InlineKeyboardButton("✅ In", callback_data="rsvp_in"),
         InlineKeyboardButton("❌ Out", callback_data="rsvp_out"),
         InlineKeyboardButton("⌛ Pending", callback_data="rsvp_pending"),
     ]
-    
-    # Action Buttons
     action_row = [InlineKeyboardButton("🛑 Stop Session", callback_data="stop_session")]
     if session_type == "1v1":
         action_row.append(InlineKeyboardButton("📊 Update Match Stats", callback_data="stats_input"))
     
-    # Extra config
     config_row = []
     if session_type == "1v1":
         config_row.append(InlineKeyboardButton("Change Opponent", callback_data="pick_opp"))
@@ -30,17 +26,18 @@ def get_session_keyboard(session_data, session_type):
     return InlineKeyboardMarkup([rsvp_row, action_row, config_row])
 
 def format_session_text(session_data, db_session):
+    # Fetch names with mentions
     pA = db_session.query(User).filter_by(user_id=session_data['pA']).first()
-    pA_name = pA.full_name if pA else "Unknown"
+    pA_link = f"<a href='tg://user?id={pA.user_id}'>{pA.full_name}</a>" if pA else "Unknown"
     
     status_text = ""
     
     if session_data['type'] == '1v1':
         pB = db_session.query(User).filter_by(user_id=session_data.get('pB')).first()
-        pB_name = pB.full_name if pB else "Opponent"
-        header = f"🎮 <b>1v1 Session</b>\n{pA_name} 🆚 {pB_name}\n"
+        pB_link = f"<a href='tg://user?id={pB.user_id}'>{pB.full_name}</a>" if pB else "Opponent"
+        # Using mention links
+        header = f"🎮 <b>1v1 Session</b>\n{pA_link} 🆚 {pB_link}\n"
     else:
-        # 2v2 logic
         squad_ids = session_data.get('squad', [])
         squad_names = []
         for uid in squad_ids:
@@ -49,13 +46,19 @@ def format_session_text(session_data, db_session):
         header = f"🎮 <b>2v2 Session</b>\nSquad: {', '.join(squad_names)}\n"
 
     # Lists
-    in_list = [db_session.query(User).filter_by(user_id=uid).first().full_name for uid in session_data.get('in', [])]
-    out_list = [db_session.query(User).filter_by(user_id=uid).first().full_name for uid in session_data.get('out', [])]
+    in_list = []
+    for uid in session_data.get('in', []):
+        u = db_session.query(User).filter_by(user_id=uid).first()
+        if u: in_list.append(u.full_name)
+        
+    out_list = []
+    for uid in session_data.get('out', []):
+        u = db_session.query(User).filter_by(user_id=uid).first()
+        if u: out_list.append(u.full_name)
     
     status_text += f"\n✅ <b>In ({len(in_list)}):</b> {', '.join(in_list)}"
     status_text += f"\n❌ <b>Out ({len(out_list)}):</b> {', '.join(out_list)}"
     
-    # Pending with times
     pending_list = []
     for uid, time_str in session_data.get('pending', {}).items():
         u = db_session.query(User).filter_by(user_id=int(uid)).first()
@@ -85,7 +88,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # --- NEW SESSION FLOW ---
         if data == "new_1v1":
-            # Show tracked members to pick opponent
             members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
             buttons = []
             for m in members:
@@ -97,10 +99,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data.startswith("sel_opp_"):
             opp_id = int(data.split("_")[-1])
-            
-            # Create Session
             ttl_min = db.query(Chat).filter_by(chat_id=chat_id).first().session_ttl
-            # FIX: Use timezone-aware UTC time
             expiry = datetime.now(timezone.utc) + timedelta(minutes=ttl_min)
             
             session_data = {
@@ -110,9 +109,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "in": [], "out": [], "pending": {}
             }
             
-            # Send fresh message for the session
-            await query.message.delete() # clean up picker
+            await query.message.delete()
             
+            # Send message with mentions
             sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=format_session_text(session_data, db),
@@ -120,7 +119,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_session_keyboard(session_data, "1v1")
             )
             
-            # Persist
             new_sess = GameSession(
                 message_id=sent_msg.message_id,
                 chat_id=chat_id,
@@ -133,63 +131,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.commit()
             return
 
-        if data == "new_2v2":
-            # Check for existing squad
-            chat = db.query(Chat).filter_by(chat_id=chat_id).first()
-            squad = chat.primary_squad
-            
-            if not squad:
-                await query.edit_message_text("No primary squad set. Please contact admin (Future Feature: Edit Squad).")
-                squad = [] 
-            
-            ttl_min = chat.session_ttl
-            # FIX: Use timezone-aware UTC time
-            expiry = datetime.now(timezone.utc) + timedelta(minutes=ttl_min)
-            
-            session_data = {
-                "type": "2v2",
-                "pA": user_id,
-                "squad": squad,
-                "in": [], "out": [], "pending": {}
-            }
-            
-            await query.message.delete()
-            sent_msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=format_session_text(session_data, db),
-                parse_mode="HTML",
-                reply_markup=get_session_keyboard(session_data, "2v2")
-            )
-            
-            new_sess = GameSession(
-                message_id=sent_msg.message_id,
-                chat_id=chat_id,
-                session_type="2v2",
-                initiator_id=user_id,
-                expires_at=expiry,
-                state_data=session_data
-            )
-            db.add(new_sess)
-            db.commit()
-            return
-
         # --- EXISTING SESSION INTERACTION ---
-        
         session = db.query(GameSession).filter_by(message_id=msg_id).first()
         
         if not session:
-            await query.message.edit_text("❌ Session not found or deleted from DB.")
+            await query.message.edit_text("❌ Session not found or deleted.")
             return
             
-        # FIX: Compare with timezone-aware UTC time
         if datetime.now(timezone.utc) > session.expires_at:
             await query.message.edit_text("❌ Session Expired.")
             db.delete(session)
             db.commit()
             return
 
-        s_data = dict(session.state_data) # Copy for mutation
+        s_data = dict(session.state_data)
         
+        # --- PERMISSION CHECKS ---
+        # Only Players A and B can stop session, enter stats, or RSVP for 1v1
+        is_player = (user_id == s_data['pA'] or user_id == s_data.get('pB'))
+        
+        if session.session_type == "1v1" and not is_player:
+            # Allow admins or just ignore? Let's show alert.
+            await context.bot.answer_callback_query(query.id, "🚫 Only players can click this.", show_alert=True)
+            return
+
         # RSVP Logic
         if data in ["rsvp_in", "rsvp_out"]:
             if user_id in s_data['in']: s_data['in'].remove(user_id)
@@ -199,34 +164,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if data == "rsvp_in": s_data['in'].append(user_id)
             else: s_data['out'].append(user_id)
             
+            # CRITICAL FIX: Tell DB JSON changed
             session.state_data = s_data
+            flag_modified(session, "state_data")
             db.commit()
-            await query.message.edit_text(format_session_text(s_data, db), parse_mode="HTML", reply_markup=get_session_keyboard(s_data, session.session_type))
-            return
-
-        if data == "rsvp_pending":
-            timers = [
-                [InlineKeyboardButton("5m", callback_data="time_5m"), InlineKeyboardButton("10m", callback_data="time_10m")],
-                [InlineKeyboardButton("15m", callback_data="time_15m"), InlineKeyboardButton("30m", callback_data="time_30m")],
-                [InlineKeyboardButton("🔙 Back", callback_data="time_back")]
-            ]
-            await query.message.edit_reply_markup(InlineKeyboardMarkup(timers))
-            return
-
-        if data.startswith("time_"):
-            if data == "time_back":
-                await query.message.edit_reply_markup(get_session_keyboard(s_data, session.session_type))
-                return
-                
-            label = data.split("_")[1] # 5m, 10m...
             
-            if user_id in s_data['in']: s_data['in'].remove(user_id)
-            if user_id in s_data['out']: s_data['out'].remove(user_id)
-            
-            s_data['pending'][str(user_id)] = f"in {label}"
-            
-            session.state_data = s_data
-            db.commit()
             await query.message.edit_text(format_session_text(s_data, db), parse_mode="HTML", reply_markup=get_session_keyboard(s_data, session.session_type))
             return
 
