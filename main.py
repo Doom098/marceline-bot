@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 # Feature Imports
 from features.general import (
     track_activity, mention_all, exclude_member, include_member, 
-    all_list, who_all, help_command, about_command, set_about, start_command, handle_dm_callback
+    all_list, who_all, help_command, about_command, set_about, start_command, handle_dm_callback,
+    set_dm_commands, set_dm_about, set_dm_repo # <--- Imported new functions
 )
 from features.vault import (
     save_item, recall_item, list_saves, delete_save,
@@ -40,12 +41,10 @@ async def cleanup_sessions(context):
         now = datetime.now(timezone.utc)
         expired = db.query(GameSession).filter(GameSession.expires_at < now).all()
         for session in expired:
-            # Try to delete message from Telegram
             try:
                 await context.bot.delete_message(chat_id=session.chat_id, message_id=session.message_id)
             except Exception:
-                pass # Message might be too old or already deleted
-            
+                pass
             db.delete(session)
         db.commit()
 
@@ -56,15 +55,19 @@ def main():
     
     # --- Job Queue (Auto Delete) ---
     jq = app.job_queue
-    # CHANGED: Interval set to 21600 seconds (6 Hours)
     jq.run_repeating(cleanup_sessions, interval=21600, first=60) 
 
     # --- Handlers ---
     
-    # 1. General
+    # 1. General & DM Management
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(handle_dm_callback, pattern=r"^dm_"))
     
+    # Super Admin DM Setters
+    app.add_handler(CommandHandler("setdmcommands", set_dm_commands))
+    app.add_handler(CommandHandler("setdmabout", set_dm_about))
+    app.add_handler(CommandHandler("setdmrepo", set_dm_repo))
+
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), track_activity), group=1)
     
     app.add_handler(CommandHandler("all", mention_all))
