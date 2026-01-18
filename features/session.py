@@ -138,7 +138,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "new_1v1":
             members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
             buttons = []
-            # We encode the Host ID (user_id) into the button so only THEY can click it
             for m in members:
                 u = db.query(User).filter_by(user_id=m.user_id).first()
                 if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}_{user_id}")])
@@ -155,7 +154,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             opp_id = int(parts[2])
             host_id = int(parts[3])
 
-            # Security Check: Only the host (who clicked /play or Change Opponent) can pick
             if user_id != host_id:
                 await context.bot.answer_callback_query(query.id, "🚫 Only the host can pick the opponent.", show_alert=True)
                 return
@@ -243,14 +241,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         s_data = dict(session.state_data)
         
+        # --- PERMISSION CHECKS (CRITICAL FIX) ---
         is_player = (user_id == s_data.get('pA') or user_id == s_data.get('pB'))
         
-        if session.session_type == "1v1" and not is_player and data in ["stop_session", "stats_input"]:
-             await context.bot.answer_callback_query(query.id, "🚫 Only players can do this.", show_alert=True)
+        # If it's a 1v1 session, ONLY the two specific players can touch the buttons.
+        # This blocks: In, Out, Pending, Stop, Stats, Timers.
+        # Exception: "pick_opp" has its own host check below.
+        if session.session_type == "1v1" and not is_player and data != "pick_opp":
+             await context.bot.answer_callback_query(query.id, "🚫 You are not in this match.", show_alert=True)
              return
 
         if data == "pick_opp":
-            # Strict Host Check
             if user_id != s_data.get('pA'):
                 await context.bot.answer_callback_query(query.id, "🚫 Only the host can change opponent.", show_alert=True)
                 return
@@ -258,7 +259,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.delete(session)
             db.commit()
             
-            # Show Picker with HOST ID LOCKED
             members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
             buttons = []
             for m in members:
@@ -269,7 +269,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         if data == "edit_squad":
-            # Just an alert because editing requires typing a command
             await context.bot.answer_callback_query(query.id, "Use /setsquad @p1 @p2... to change squad", show_alert=True)
             return
 
@@ -292,7 +291,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timers = [
                 [InlineKeyboardButton("5m", callback_data="time_5m"), InlineKeyboardButton("10m", callback_data="time_10m")],
                 [InlineKeyboardButton("15m", callback_data="time_15m"), InlineKeyboardButton("30m", callback_data="time_30m")],
-                [InlineKeyboardButton("45m", callback_data="time_45m"), InlineKeyboardButton("1h", callback_data="time_1h")], # Added here
+                [InlineKeyboardButton("45m", callback_data="time_45m"), InlineKeyboardButton("1h", callback_data="time_1h")],
                 [InlineKeyboardButton("🔙 Back", callback_data="time_back")]
             ]
             await query.message.edit_reply_markup(InlineKeyboardMarkup(timers))
