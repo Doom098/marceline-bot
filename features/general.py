@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 from telegram.ext import ContextTypes
 from database import get_db
 from models import ChatMember, User, Chat
@@ -9,6 +9,72 @@ async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ['group', 'supergroup']:
         with next(get_db()) as db:
             ensure_user_and_chat(update, db)
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Personal DM Flow
+    if update.effective_chat.type == 'private':
+        keyboard = [
+            [InlineKeyboardButton("📜 Commands", callback_data="dm_commands")],
+            [InlineKeyboardButton("ℹ️ About", callback_data="dm_about")],
+            [InlineKeyboardButton("📦 Repo", url="https://github.com/Doom098/marceline-bot")]
+        ]
+        await update.message.reply_text(
+            "👋 <b>I'm Marceline!</b>\nYour Telegram Group Helper.\n\nChoose an option:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    else:
+        # Group Flow
+        await update.message.reply_text("I'm ready! Use /help to see what I can do.")
+
+async def handle_dm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    await query.answer()
+    
+    if data == "dm_commands":
+        # Reuse help text but formatted for DM
+        text = """
+<b>🤖 Command List</b>
+
+<b>Group Basics</b>
+/all - Mention everyone
+/exclude @user - Stop mentioning someone
+/include @user - Include them again
+/alllist - Show mention stats
+
+<b>Vault</b>
+/save [key] - Save (Reply)
+/q [key] - Recall
+/exsave [key] - Save Excuse (Reply)
+/excuse - Random Excuse
+/ssave [key] - Save Sticker (Reply)
+/s [key] - Recall Sticker
+
+<b>Fun & Games</b>
+/roast - Burn someone
+/play - Start 1v1 / 2v2
+/stats - Leaderboards
+/stats @user - Player Profile
+"""
+        await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="dm_back")]]))
+
+    elif data == "dm_about":
+        text = "<b>Marceline Bot</b>\nBuilt with Python + SQLAlchemy.\nManaged by @Doom098."
+        await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="dm_back")]]))
+
+    elif data == "dm_back":
+        # Restore Main Menu
+        keyboard = [
+            [InlineKeyboardButton("📜 Commands", callback_data="dm_commands")],
+            [InlineKeyboardButton("ℹ️ About", callback_data="dm_about")],
+            [InlineKeyboardButton("📦 Repo", url="https://github.com/Doom098/marceline-bot")]
+        ]
+        await query.message.edit_text(
+            "👋 <b>I'm Marceline!</b>\nYour Telegram Group Helper.\n\nChoose an option:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
 
 async def mention_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -28,56 +94,84 @@ async def mention_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user:
                 mentions.append(f"<a href='tg://user?id={user.user_id}'>{user.full_name}</a>")
         
-        # Chunking to avoid limits
-        chunk_size = 30 # conservative limit
+        chunk_size = 30 
         chunks = [mentions[i:i + chunk_size] for i in range(0, len(mentions), chunk_size)]
         
         for chunk in chunks:
             await update.message.reply_text(" ".join(chunk), parse_mode="HTML")
 
+async def get_target_users(update: Update, context: ContextTypes.DEFAULT_TYPE, db):
+    """Helper to find users from replies OR mentions"""
+    targets = []
+    
+    # 1. Reply
+    if update.message.reply_to_message:
+        targets.append(update.message.reply_to_message.from_user)
+    
+    # 2. Mentions (Entities)
+    if update.message.entities:
+        for entity in update.message.entities:
+            if entity.type == "text_mention":
+                targets.append(entity.user)
+            elif entity.type == "mention":
+                # Username lookup
+                username = update.message.text[entity.offset:entity.offset+entity.length].lstrip('@')
+                user = db.query(User).filter(User.username.ilike(username)).first()
+                if user:
+                    # Create a dummy object with id/name for consistency
+                    class MockUser:
+                        def __init__(self, uid, name):
+                            self.id = uid
+                            self.full_name = name
+                    targets.append(MockUser(user.user_id, user.full_name))
+    
+    return targets
+
 async def exclude_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    target_ids = []
-    
-    # Check reply
-    if update.message.reply_to_message:
-        target_ids.append(update.message.reply_to_message.from_user.id)
-    
-    # Check mentions in command args (if entities exist)
-    if not target_ids and not context.args:
-         await update.message.reply_text("Reply to a user or mention them to exclude.")
-         return
-
-    # Process entities if simple mention fails, but usually reply is best.
-    # We will stick to Reply logic for strictness or @mention text parsing if needed.
-    # Simple reply implementation as requested.
-
     with next(get_db()) as db:
+        targets = await get_target_users(update, context, db)
+        
+        if not targets:
+            await update.message.reply_text("Reply to or mention users to exclude.")
+            return
+
         count = 0
-        for uid in target_ids:
-            member = db.query(ChatMember).filter_by(chat_id=chat_id, user_id=uid).first()
+        names = []
+        for t in targets:
+            member = db.query(ChatMember).filter_by(chat_id=chat_id, user_id=t.id).first()
             if member:
                 member.is_excluded = True
                 count += 1
+                names.append(t.full_name)
+        
         db.commit()
         if count > 0:
-            await update.message.reply_text(f"Excluded {count} member(s) from /all.")
+            await update.message.reply_text(f"🚫 Excluded: {', '.join(names)}")
+        else:
+            await update.message.reply_text("Users not found in tracking list.")
 
 async def include_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Logic similar to exclude, simplified for brevity: works on reply
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to a user to include them.")
-        return
-        
     chat_id = update.effective_chat.id
-    uid = update.message.reply_to_message.from_user.id
-    
     with next(get_db()) as db:
-        member = db.query(ChatMember).filter_by(chat_id=chat_id, user_id=uid).first()
-        if member:
-            member.is_excluded = False
-            db.commit()
-            await update.message.reply_text("User included back in /all.")
+        targets = await get_target_users(update, context, db)
+        
+        if not targets:
+            await update.message.reply_text("Reply to or mention users to include.")
+            return
+
+        count = 0
+        names = []
+        for t in targets:
+            member = db.query(ChatMember).filter_by(chat_id=chat_id, user_id=t.id).first()
+            if member:
+                member.is_excluded = False
+                count += 1
+                names.append(t.full_name)
+        
+        db.commit()
+        if count > 0:
+            await update.message.reply_text(f"✅ Included: {', '.join(names)}")
 
 async def all_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -89,7 +183,7 @@ async def all_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         excluded_names = []
         for m in excluded:
             u = db.query(User).filter_by(user_id=m.user_id).first()
-            excluded_names.append(u.full_name)
+            if u: excluded_names.append(u.full_name)
             
         msg = (f"📊 <b>Member Stats</b>\n"
                f"Total Tracked: {total}\n"
@@ -97,7 +191,7 @@ async def all_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"Excluded: {len(excluded)}\n")
         
         if excluded_names:
-            msg += f"Excluded: {', '.join(excluded_names)}"
+            msg += f"Names: {', '.join(excluded_names)}"
             
         await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -118,27 +212,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 <b>General</b>
 /all - Mention everyone
-/exclude - (Reply) Exclude user from /all
-/include - (Reply) Include user back
+/exclude @user - Exclude from /all
+/include @user - Include back
 /alllist - Show stats
-/about - Bot info
 
-<b>Vault (Save/Recall)</b>
-/save [key] - (Reply) Save text/media
-/q [key] - Recall saved item
-/sshow, /sdel [key] - Manage saves
+<b>Vault</b>
+/save [key] - (Reply) Save media/text
+/q [key] - Recall
 /ssave [key] - (Reply) Save sticker
 /s [key] - Recall sticker
-/stshow, /stdel [key] - Manage stickers
-/exsave [key], /excuse - Excuses
-
-<b>Roast</b>
-/roast - Roast someone
-/roastadd, /roastshow, /roastdel - Manage custom roasts
+/exsave [key] - Save excuse (Reply or Type)
+/excuse - Random excuse
+/exshow, /exdel - Manage excuses
+/stshow, /stdel - Manage stickers
 
 <b>Gaming</b>
-/play - Start 1v1 or 2v2 session
-/stats - Check stats
+/play - Start session
+/stats - Leaderboards
+/stats @user - Player Profile
     """
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -150,14 +241,11 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"ℹ️ <b>About:</b>\n{about}", parse_mode="HTML")
 
 async def set_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        return
+    if not context.args: return
     text = " ".join(context.args)
     chat_id = update.effective_chat.id
     from config import SUPERADMIN_ID
-    if update.effective_user.id != SUPERADMIN_ID:
-        return
-        
+    if update.effective_user.id != SUPERADMIN_ID: return
     with next(get_db()) as db:
         chat = db.query(Chat).filter_by(chat_id=chat_id).first()
         if chat:
