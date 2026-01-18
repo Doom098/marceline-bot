@@ -41,7 +41,8 @@ def main():
     # --- Handlers ---
     
     # 1. General & Tracking
-    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), track_activity), group=1)
+    app.add_handler(MessageHandler(filters.ALL, track_activity), group=1)
+
     
     app.add_handler(CommandHandler("all", mention_all))
     app.add_handler(CommandHandler("exclude", exclude_member))
