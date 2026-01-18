@@ -51,9 +51,8 @@ def ensure_user_and_chat(update: Update, db: Session):
         
         db.commit()
     except SQLAlchemyError as e:
-    db.rollback()
-    print("DB error:", e)
-
+        db.rollback()
+        print("DB error:", e)
 
 def get_chat_member_name(user: User):
     if user.username:
