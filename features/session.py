@@ -9,7 +9,6 @@ import json
 # --- Helpers ---
 def get_session_keyboard(session_data, session_type):
     # Check if we should switch to "Game On" mode (Minimal UI)
-    # Logic: If 1v1 and BOTH players are IN, hide RSVP buttons
     pA = session_data.get('pA')
     pB = session_data.get('pB')
     in_list = session_data.get('in', [])
@@ -22,7 +21,6 @@ def get_session_keyboard(session_data, session_type):
     )
 
     if is_ready_1v1:
-        # Minimal Keyboard: Just Stop and Stats
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🛑 Stop Session", callback_data="stop_session"),
              InlineKeyboardButton("📊 Update Match Stats", callback_data="stats_input")]
@@ -48,7 +46,6 @@ def get_session_keyboard(session_data, session_type):
     return InlineKeyboardMarkup([rsvp_row, action_row, config_row])
 
 def format_session_text(session_data, db_session):
-    # Fetch names with mentions
     pA = db_session.query(User).filter_by(user_id=session_data['pA']).first()
     pA_link = f"<a href='tg://user?id={pA.user_id}'>{pA.full_name}</a>" if pA else "Unknown"
     
@@ -66,7 +63,6 @@ def format_session_text(session_data, db_session):
             if u: squad_names.append(u.full_name)
         header = f"🎮 <b>2v2 Session</b>\nSquad: {', '.join(squad_names)}\n"
 
-    # Lists
     in_list = []
     for uid in session_data.get('in', []):
         u = db_session.query(User).filter_by(user_id=uid).first()
@@ -88,6 +84,41 @@ def format_session_text(session_data, db_session):
     status_text += f"\n⌛ <b>Pending:</b> {', '.join(pending_list)}"
     
     return header + status_text
+
+# --- Commands ---
+
+async def set_squad(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    
+    # Identify users from message entities (Mentions)
+    ids = set()
+    
+    if update.message.entities:
+        for entity in update.message.entities:
+            if entity.type == "text_mention":
+                # User object available directly
+                ids.add(entity.user.id)
+            elif entity.type == "mention":
+                # Username mention - lookup in DB
+                username = update.message.text[entity.offset:entity.offset+entity.length]
+                username = username.lstrip('@')
+                
+                with next(get_db()) as db:
+                    u = db.query(User).filter(User.username.ilike(username)).first()
+                    if u: ids.add(u.user_id)
+    
+    if not ids:
+         await update.message.reply_text("⚠️ Please mention the users you want in the squad.\nExample: <code>/setsquad @User1 @User2 @User3</code>", parse_mode="HTML")
+         return
+
+    with next(get_db()) as db:
+        chat = db.query(Chat).filter_by(chat_id=chat_id).first()
+        chat.primary_squad = list(ids)
+        flag_modified(chat, "primary_squad")
+        db.commit()
+        
+    await update.message.reply_text(f"✅ <b>Squad Saved!</b>\nAdded {len(ids)} players to 2v2 list.", parse_mode="HTML")
+
 
 # --- Handlers ---
 
@@ -135,7 +166,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             
             await query.message.delete()
-            
             sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=format_session_text(session_data, db),
@@ -160,8 +190,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             squad = chat.primary_squad
             
             if not squad:
-                await query.edit_message_text("No primary squad set. Please contact admin (Future Feature: Edit Squad).")
-                squad = [] 
+                await query.edit_message_text("⚠️ No squad set!\nUse <code>/setsquad @p1 @p2 @p3</code> to set it.", parse_mode="HTML")
+                return
             
             ttl_min = chat.session_ttl
             expiry = datetime.now(timezone.utc) + timedelta(minutes=ttl_min)
@@ -215,31 +245,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await context.bot.answer_callback_query(query.id, "🚫 Only players can do this.", show_alert=True)
              return
 
-        # --- NEW LOGIC FOR CHANGING OPPONENT ---
         if data == "pick_opp":
-            # 1. Permission: Only Host (pA) can change
             if user_id != s_data.get('pA'):
                 await context.bot.answer_callback_query(query.id, "🚫 Only the host can change opponent.", show_alert=True)
                 return
-            
-            # 2. Delete the current session from DB (Clean slate)
             db.delete(session)
             db.commit()
-
-            # 3. Show Member Picker (Same logic as new_1v1)
             members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
             buttons = []
             for m in members:
                 u = db.query(User).filter_by(user_id=m.user_id).first()
                 if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}")])
-            
-            if not buttons:
-                 await query.edit_message_text("No other members to pick.")
-                 return
-
             await query.edit_message_text("Select New Opponent:", reply_markup=InlineKeyboardMarkup(buttons))
             return
-
+            
+        if data == "edit_squad":
+            await context.bot.answer_callback_query(query.id, "Use /setsquad @p1 @p2... to change squad", show_alert=True)
+            return
 
         # RSVP Logic
         if data in ["rsvp_in", "rsvp_out"]:
