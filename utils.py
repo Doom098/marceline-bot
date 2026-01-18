@@ -1,52 +1,57 @@
-from telegram import Update, User as TgUser
+from telegram import Update
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from models import User, Chat, ChatMember
 from datetime import datetime
 
 def ensure_user_and_chat(update: Update, db: Session):
     """
-    Updates User and Chat tables, and links them in ChatMember.
-    Call this at the start of most handlers.
+    Updates User and Chat tables safely. 
+    Handles race conditions/errors by rolling back if needed.
     """
     if not update.effective_chat or not update.effective_user:
         return
 
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
+    chat_title = update.effective_chat.title or "Unknown Chat"
     
-    # 1. Ensure Chat
-    chat = db.query(Chat).filter_by(chat_id=chat_id).first()
-    if not chat:
-        chat = Chat(chat_id=chat_id, title=update.effective_chat.title)
-        db.add(chat)
-    else:
-        # Update title if changed
-        if chat.title != update.effective_chat.title:
-            chat.title = update.effective_chat.title
+    user = update.effective_user
+    full_name = user.full_name
+    username = user.username
 
-    # 2. Ensure User
-    user = db.query(User).filter_by(user_id=user_id).first()
-    full_name = update.effective_user.full_name
-    username = update.effective_user.username
-    
-    if not user:
-        user = User(user_id=user_id, full_name=full_name, username=username)
-        db.add(user)
-    else:
-        # Update details if changed
-        if user.full_name != full_name or user.username != username:
-            user.full_name = full_name
-            user.username = username
+    try:
+        # 1. Ensure Chat
+        chat_db = db.query(Chat).filter_by(chat_id=chat_id).first()
+        if not chat_db:
+            chat_db = Chat(chat_id=chat_id, title=chat_title)
+            db.add(chat_db)
+        else:
+            if chat_db.title != chat_title:
+                chat_db.title = chat_title
 
-    # 3. Ensure ChatMember Link & Update Activity
-    member = db.query(ChatMember).filter_by(chat_id=chat_id, user_id=user_id).first()
-    if not member:
-        member = ChatMember(chat_id=chat_id, user_id=user_id)
-        db.add(member)
-    
-    member.last_active = datetime.now()
-    
-    db.commit()
+        # 2. Ensure User
+        user_db = db.query(User).filter_by(user_id=user_id).first()
+        if not user_db:
+            user_db = User(user_id=user_id, full_name=full_name, username=username)
+            db.add(user_db)
+        else:
+            if user_db.full_name != full_name or user_db.username != username:
+                user_db.full_name = full_name
+                user_db.username = username
+
+        # 3. Ensure Member Link
+        member = db.query(ChatMember).filter_by(chat_id=chat_id, user_id=user_id).first()
+        if not member:
+            member = ChatMember(chat_id=chat_id, user_id=user_id)
+            db.add(member)
+        
+        member.last_active = datetime.now()
+        
+        db.commit()
+    except SQLAlchemyError:
+        # If anything goes wrong (race condition), rollback to keep session clean
+        db.rollback()
 
 def get_chat_member_name(user: User):
     if user.username:
