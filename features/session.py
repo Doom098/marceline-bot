@@ -6,6 +6,10 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm.attributes import flag_modified
 import json
 
+# Move import here to avoid runtime circular import issues, 
+# but wrap in try/except or keep inside handler if strictly necessary. 
+# For this structure, inside handler is safer but we will debug the call.
+
 # --- Helpers ---
 def get_session_keyboard(session_data, session_type):
     # Check if we should switch to "Game On" mode (Minimal UI)
@@ -40,8 +44,7 @@ def get_session_keyboard(session_data, session_type):
     config_row = []
     if session_type == "1v1":
         config_row.append(InlineKeyboardButton("Change Opponent", callback_data="pick_opp"))
-    elif session_type == "2v2":
-        config_row.append(InlineKeyboardButton("Edit Squad", callback_data="edit_squad"))
+    # Removed "Edit Squad" button for 2v2 as requested
 
     return InlineKeyboardMarkup([rsvp_row, action_row, config_row])
 
@@ -56,7 +59,7 @@ def format_session_text(session_data, db_session):
         pB_link = f"<a href='tg://user?id={pB.user_id}'>{pB.full_name}</a>" if pB else "Opponent"
         header = f"🎮 <b>1v1 Session</b>\n{pA_link} 🆚 {pB_link}\n"
     else:
-        # 2v2 Logic with Mentions
+        # 2v2 Logic
         squad_ids = session_data.get('squad', [])
         squad_names = []
         for uid in squad_ids:
@@ -98,8 +101,7 @@ async def set_squad(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if entity.type == "text_mention":
                 ids.add(entity.user.id)
             elif entity.type == "mention":
-                username = update.message.text[entity.offset:entity.offset+entity.length]
-                username = username.lstrip('@')
+                username = update.message.text[entity.offset:entity.offset+entity.length].lstrip('@')
                 with next(get_db()) as db:
                     u = db.query(User).filter(User.username.ilike(username)).first()
                     if u: ids.add(u.user_id)
@@ -132,6 +134,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
 
+    # We use a persistent DB session for most ops
     with next(get_db()) as db:
         
         # --- NEW SESSION FLOW ---
@@ -241,12 +244,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         s_data = dict(session.state_data)
         
-        # --- PERMISSION CHECKS (CRITICAL FIX) ---
         is_player = (user_id == s_data.get('pA') or user_id == s_data.get('pB'))
         
-        # If it's a 1v1 session, ONLY the two specific players can touch the buttons.
-        # This blocks: In, Out, Pending, Stop, Stats, Timers.
-        # Exception: "pick_opp" has its own host check below.
         if session.session_type == "1v1" and not is_player and data != "pick_opp":
              await context.bot.answer_callback_query(query.id, "🚫 You are not in this match.", show_alert=True)
              return
@@ -266,10 +265,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}_{user_id}")])
             
             await query.edit_message_text("Select New Opponent:", reply_markup=InlineKeyboardMarkup(buttons))
-            return
-            
-        if data == "edit_squad":
-            await context.bot.answer_callback_query(query.id, "Use /setsquad @p1 @p2... to change squad", show_alert=True)
             return
 
         if data in ["rsvp_in", "rsvp_out"]:
@@ -323,10 +318,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.commit()
             return
 
+        # --- FIX FOR STATS INPUT ---
         if data == "stats_input":
-            from features.stats import start_stats_input
-            await query.message.delete()
+            # Extract IDs before we delete anything
+            pA_id = s_data.get('pA')
+            pB_id = s_data.get('pB')
+            
+            # Delete message and DB entry first
+            try:
+                await query.message.delete()
+            except Exception:
+                pass # Message might be gone already
+            
             db.delete(session)
             db.commit()
-            await start_stats_input(context, chat_id, s_data['pA'], s_data.get('pB'))
+            
+            # Now trigger the stats flow (IMPORT HERE to be safe)
+            from features.stats import start_stats_input
+            
+            # This function will open its own fresh DB connection
+            await start_stats_input(context, chat_id, pA_id, pB_id)
             return
