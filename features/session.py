@@ -1,3 +1,4 @@
+from utils import ensure_user_and_chat
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import get_db
@@ -81,19 +82,44 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
 
-    with next(get_db()) as db:
+   with next(get_db()) as db:
+    ensure_user_and_chat(update, db)
+
+    # then continue your callback logic...
+    # read members, edit messages, save session data, etc.
+
         
         # --- NEW SESSION FLOW ---
         if data == "new_1v1":
-            # Show tracked members to pick opponent
-            members = db.query(ChatMember).filter(ChatMember.chat_id==chat_id, ChatMember.user_id!=user_id).limit(20).all()
-            buttons = []
-            for m in members:
-                u = db.query(User).filter_by(user_id=m.user_id).first()
-                if u: buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}")])
-            
-            await query.edit_message_text("Select Opponent:", reply_markup=InlineKeyboardMarkup(buttons))
-            return
+    # Track clicker
+    ensure_user_and_chat(update, db)
+
+    # Show tracked members to pick opponent (excluding the clicker)
+    members = (
+        db.query(ChatMember)
+        .filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id)
+        .order_by(ChatMember.last_active.desc())
+        .limit(50)
+        .all()
+    )
+
+    if not members:
+        await query.edit_message_text(
+            "No members found yet.\n\n"
+            "✅ Ask your friends to send ONE message or run /play once so I can track them.\n"
+            "Then try /play again."
+        )
+        return
+
+    buttons = []
+    for m in members:
+        u = db.query(User).filter_by(user_id=m.user_id).first()
+        if u:
+            buttons.append([InlineKeyboardButton(u.full_name, callback_data=f"sel_opp_{u.user_id}")])
+
+    await query.edit_message_text("Select Opponent:", reply_markup=InlineKeyboardMarkup(buttons))
+    return
+
 
         if data.startswith("sel_opp_"):
             opp_id = int(data.split("_")[-1])
