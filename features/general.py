@@ -5,6 +5,43 @@ from models import ChatMember, User, Chat, BotSetting
 from utils import ensure_user_and_chat, get_chat_member_name
 from config import SUPERADMIN_ID
 
+# --- CONSTANTS ---
+FULL_COMMAND_LIST = """<b>🤖 Marceline Commands</b>
+
+<b>🎮 Gaming</b>
+/play - Start 1v1 / 2v2 Session
+/setsquad - Set 2v2 Primary Squad
+/stats - View Leaderboards
+/stats @user - View Player Profile
+
+<b>📣 Group</b>
+/all - Mention all members
+/exclude - Hide me from /all
+/include - Show me in /all
+/alllist - Member stats
+/whoall - Who gets pinged
+
+<b>🔐 Vault</b>
+/save [key] - Save (Reply)
+/q [key] - Recall
+/sshow, /sdel - Manage saves
+/ssave [key] - Save sticker
+/s [key] - Recall sticker
+/stshow, /stdel - Manage stickers
+/exsave [key] - Save excuse
+/excuse - Get excuse
+/exshow, /exdel - Manage excuses
+
+<b>🔥 Fun</b>
+/roast - Roast someone
+/roastadd - Add roast
+/roastshow - List roasts
+/roastdel - Delete roast
+
+<b>ℹ️ Info</b>
+/help - Show this list
+/about - Group info"""
+
 async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Middleware to track user activity."""
     if update.effective_chat.type in ['group', 'supergroup']:
@@ -52,8 +89,8 @@ async def handle_dm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     with next(get_db()) as db:
         repo_url = get_setting(db, "dm_repo", "https://github.com/Doom098/marceline-bot")
         
-        # Default Texts
-        default_cmds = "<b>🤖 Commands</b>\n/play - Start Game\n/stats - Leaderboard\n/save - Vault\n/roast - Roast"
+        # Updated Default Texts using the Full List
+        default_cmds = FULL_COMMAND_LIST
         default_about = "<b>Marceline Bot</b>\nBuilt with Python."
         
         if data == "dm_commands":
@@ -91,7 +128,6 @@ async def set_dm_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /setdmcommands <text (supports HTML)>")
         return
     
-    # Preserve newlines from the message
     text = update.message.text.split(" ", 1)[1]
     with next(get_db()) as db:
         set_setting(db, "dm_commands", text)
@@ -231,8 +267,8 @@ async def who_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Will ping: {', '.join(names)}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "<b>Check /start in DM for full command list.</b>"
-    await update.message.reply_text(text, parse_mode="HTML")
+    # Updated to show full list in groups
+    await update.message.reply_text(FULL_COMMAND_LIST, parse_mode="HTML")
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
