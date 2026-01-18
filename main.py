@@ -17,7 +17,7 @@ from features.roast import (
     roast_command, start_add_roast, save_roast, show_roasts, del_roast, ADD_ROAST_TEXT
 )
 from features.session import (
-    start_play, handle_callback
+    start_play, handle_callback, set_squad
 )
 from features.stats import (
     show_leaderboard, handle_stats_callback
@@ -41,8 +41,7 @@ def main():
     # --- Handlers ---
     
     # 1. General & Tracking
-    app.add_handler(MessageHandler(filters.ALL, track_activity), group=1)
-
+    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), track_activity), group=1)
     
     app.add_handler(CommandHandler("all", mention_all))
     app.add_handler(CommandHandler("exclude", exclude_member))
@@ -81,12 +80,11 @@ def main():
 
     # 4. Sessions & Stats
     app.add_handler(CommandHandler("play", start_play))
+    app.add_handler(CommandHandler("setsquad", set_squad)) # <--- Added here
     app.add_handler(CommandHandler("stats", show_leaderboard))
     
-    # Unified Callback Handler for Sessions and Stats
-    # We split them by pattern in the function or use multiple handlers with pattern regex
     app.add_handler(CallbackQueryHandler(handle_stats_callback, pattern=r"^stat_"))
-    app.add_handler(CallbackQueryHandler(handle_callback)) # Catch-all for session buttons
+    app.add_handler(CallbackQueryHandler(handle_callback)) 
 
     # 5. Admin
     app.add_handler(CommandHandler("resetall", reset_all))
