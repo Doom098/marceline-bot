@@ -8,7 +8,7 @@ class Chat(Base):
     title = Column(String)
     about_text = Column(Text, nullable=True)
     session_ttl = Column(Integer, default=360) # minutes (6 hours)
-    primary_squad = Column(JSON, nullable=True) # List of user_ids for 2v2
+    primary_squad = Column(JSON, nullable=True) 
 
 class User(Base):
     __tablename__ = "users"
@@ -29,8 +29,8 @@ class VaultItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     chat_id = Column(BigInteger, ForeignKey("chats.chat_id"))
     keyword = Column(String)
-    item_type = Column(String) # text, photo, video, sticker, excuse, etc.
-    content = Column(String) # file_id or text content
+    item_type = Column(String) 
+    content = Column(String) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class RoastLine(Base):
@@ -43,11 +43,11 @@ class GameSession(Base):
     __tablename__ = "sessions"
     message_id = Column(BigInteger, primary_key=True)
     chat_id = Column(BigInteger, ForeignKey("chats.chat_id"))
-    session_type = Column(String) # 1v1, 2v2
+    session_type = Column(String) 
     initiator_id = Column(BigInteger)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True))
-    state_data = Column(JSON) # Stores players, rsvp status, timer choice, etc.
+    state_data = Column(JSON) 
 
 class MatchStat(Base):
     __tablename__ = "match_stats"
@@ -59,3 +59,9 @@ class MatchStat(Base):
     score_b = Column(Integer)
     is_draw = Column(Boolean, default=False)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+# NEW TABLE
+class BotSetting(Base):
+    __tablename__ = "bot_settings"
+    key = Column(String, primary_key=True)
+    value = Column(Text)
