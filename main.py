@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from features.general import (
     track_activity, mention_all, exclude_member, include_member, 
     all_list, who_all, help_command, about_command, set_about, start_command, handle_dm_callback,
-    set_dm_commands, set_dm_about, set_dm_repo # <--- Imported new functions
+    set_dm_commands, set_dm_about, set_dm_repo
 )
 from features.vault import (
     save_item, recall_item, list_saves, delete_save,
@@ -23,8 +23,9 @@ from features.roast import (
 from features.session import (
     start_play, handle_callback, set_squad
 )
+# IMPORT handle_stats_callback HERE
 from features.stats import (
-    show_leaderboard, handle_lb_callback
+    show_leaderboard, handle_lb_callback, handle_stats_callback
 )
 from features.admin import (
     reset_all, list_groups, leave_group
@@ -36,7 +37,6 @@ logging.basicConfig(
 )
 
 async def cleanup_sessions(context):
-    """Job to delete expired sessions from DB and Chat"""
     with next(get_db()) as db:
         now = datetime.now(timezone.utc)
         expired = db.query(GameSession).filter(GameSession.expires_at < now).all()
@@ -59,11 +59,9 @@ def main():
 
     # --- Handlers ---
     
-    # 1. General & DM Management
+    # 1. General
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(handle_dm_callback, pattern=r"^dm_"))
-    
-    # Super Admin DM Setters
     app.add_handler(CommandHandler("setdmcommands", set_dm_commands))
     app.add_handler(CommandHandler("setdmabout", set_dm_about))
     app.add_handler(CommandHandler("setdmrepo", set_dm_repo))
@@ -84,12 +82,10 @@ def main():
     app.add_handler(CommandHandler("q", recall_item))
     app.add_handler(CommandHandler("sshow", list_saves))
     app.add_handler(CommandHandler("sdel", delete_save))
-    
     app.add_handler(CommandHandler("ssave", save_sticker))
     app.add_handler(CommandHandler("s", recall_sticker))
     app.add_handler(CommandHandler("stshow", list_stickers)) 
     app.add_handler(CommandHandler("stdel", delete_sticker)) 
-    
     app.add_handler(CommandHandler("exsave", save_excuse))
     app.add_handler(CommandHandler("excuse", random_excuse))
     app.add_handler(CommandHandler("exshow", list_excuses)) 
@@ -112,7 +108,10 @@ def main():
     app.add_handler(CommandHandler("setsquad", set_squad))
     app.add_handler(CommandHandler("stats", show_leaderboard))
     
+    # ADDED STATS HANDLERS BACK
     app.add_handler(CallbackQueryHandler(handle_lb_callback, pattern=r"^lb_"))
+    app.add_handler(CallbackQueryHandler(handle_stats_callback, pattern=r"^stat_"))
+    
     app.add_handler(CallbackQueryHandler(handle_callback)) 
 
     # 5. Admin
