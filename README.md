@@ -64,13 +64,13 @@
     source venv/bin/activate
 
   3. ## **Dependency Injection:**
-     ** Install all required libraries, including `python-telegram-bot` and `SQLAlchemy`**
+     **Install all required libraries, including `python-telegram-bot` and `SQLAlchemy`**
 
      ```bash
      pip install -r requirements.txt
 
   4. ## **Configuration:**  
-     **Rename `.env.sample` to `.env` and insert your credentials. Ensure this file is in your `.gitignore`.
+     **Rename `.env.sample` to `.env` and insert your credentials. Ensure this file is in your `.gitignore`.**
 
   5. ## **Launch the System:**   
      **Launch the main script to wake up Marceline**
@@ -78,8 +78,3 @@
      ```bash
      python main.py
      
-
-   
-   
-
-  
