@@ -51,7 +51,7 @@
    python -m venv venv
    source venv/bin/activate  # venv\Scripts\activate on Windows
 
-3. **Environment Isolation:**
+3. **Environment Isolation:**  
    Create a virtual environment to prevent dependency conflicts:
    ```bash
    # Windows
