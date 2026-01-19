@@ -44,13 +44,14 @@
 ## 💻 Local Development
 
 1. **Clone & Environment:**
+   
    ```bash
    git clone [https://github.com/Doom098/marceline-bot.git](https://github.com/Doom098/marceline-bot.git)
    cd marceline-bot
    python -m venv venv
    source venv/bin/activate  # venv\Scripts\activate on Windows
 
-2. **Environment Isolation:**
+3. **Environment Isolation:**
    Create a virtual environment to prevent dependency conflicts:
    ```bash
    # Windows
@@ -61,7 +62,7 @@
     python3 -m venv venv
     source venv/bin/activate
 
-3. **Dependency Injection:**
+4. **Dependency Injection:**
 
    
    
