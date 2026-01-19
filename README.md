@@ -1,4 +1,4 @@
-# 🎮 Marceline // The Elite Gaming Group Manager 👾
+# 🎮 Marceline // A basic Telegram Gaming Group Manager 👾
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python&logoColor=white" />
