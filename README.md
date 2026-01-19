@@ -12,7 +12,6 @@
 ### **"I track your wins, roast your losses and remember everything you're too lazy to save. Built with caffeine and logic ☕️💻"**
 
 **Marceline** is a basic Telegram bot designed to manage competitive gaming groups. She helps you start play sessions, ping everyone, store fun stuff, and track match stats — all per-group with persistent storage.
-.
 
 ---
 
